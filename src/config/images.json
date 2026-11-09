@@ -1,0 +1,57 @@
+{
+  "$comment": "Static image manifest. scripts/optimize-images.mjs generates /images/generated/<name>-<w>.(avif|webp) for each width before dev/build; <Picture> reads the same data. Widths never exceed the source width.",
+  "images": {
+    "prompt-light": {
+      "src": "public/images/product/prompt-light.png",
+      "width": 290,
+      "height": 300,
+      "widths": [
+        290
+      ]
+    },
+    "plan-light": {
+      "src": "public/images/product/plan-light.png",
+      "width": 290,
+      "height": 336,
+      "widths": [
+        290
+      ]
+    },
+    "timeline-light": {
+      "src": "public/images/product/timeline-light.png",
+      "width": 662,
+      "height": 225,
+      "widths": [
+        480,
+        662
+      ]
+    },
+    "media-light": {
+      "src": "public/images/product/media-light.png",
+      "width": 240,
+      "height": 438,
+      "widths": [
+        240
+      ]
+    },
+    "preview-light": {
+      "src": "public/images/product/preview-light.png",
+      "width": 660,
+      "height": 432,
+      "widths": [
+        480,
+        660
+      ]
+    },
+    "stitch-mascot": {
+      "src": "public/images/branding/stitch-mascot.png",
+      "width": 256,
+      "height": 201,
+      "widths": [
+        96,
+        192,
+        256
+      ]
+    }
+  }
+}
