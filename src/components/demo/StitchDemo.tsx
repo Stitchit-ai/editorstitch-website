@@ -1,6 +1,7 @@
 "use client";
 
 import { Figtree, Geist_Mono, Newsreader } from "next/font/google";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppWindow, DEMO_EVENT, type DemoCommand } from "./AppWindow";
 import type { Screen, Theme } from "./data";
@@ -39,6 +40,9 @@ export function StitchDemo() {
   const rootRef = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [pan, setPan] = useState<Pan>({ start: true, end: false, thumb: 1, pos: 0, touched: false });
+  /** Phones only: "fit" shows the whole window at screen width; "zoom" pans a larger view. */
+  const [zoom, setZoom] = useState(false);
+  const pendingPan = useRef<number | null>(null);
 
   const measure = useCallback((touched?: boolean) => {
     const el = scroller.current;
@@ -60,16 +64,31 @@ export function StitchDemo() {
     return () => window.removeEventListener("resize", onResize);
   }, [measure]);
 
-  // Older browsers without CSS trig functions can't compute the stage scale in CSS: do it in JS.
+  // The app is a fixed 1440×900 design: scale it to the window's measured width. (CSS supplies
+  // a first-paint estimate; the measured value is authoritative in every browser.)
   useEffect(() => {
-    if (CSS.supports("transform", "scale(tan(atan2(1px, 2px)))")) return;
     const wrap = rootRef.current?.querySelector<HTMLElement>(".sd-stage-wrap");
-    const stage = wrap?.querySelector<HTMLElement>(".sd-stage");
-    if (!wrap || !stage) return;
-    const ro = new ResizeObserver(() => (stage.style.transform = `scale(${wrap.clientWidth / 1440})`));
+    if (!wrap) return;
+    const apply = () => {
+      // Exact (fractional) width: clientWidth rounds, which would shift the app by a sub-pixel.
+      wrap.style.setProperty("--sd-scale", String(wrap.getBoundingClientRect().width / 1440));
+      measure();
+      if (pendingPan.current !== null && scroller.current) {
+        const el = scroller.current;
+        el.scrollTo({ left: pendingPan.current * (el.scrollWidth - el.clientWidth), behavior: "smooth" });
+        pendingPan.current = null;
+      }
+    };
+    const ro = new ResizeObserver(apply);
     ro.observe(wrap);
+    apply();
     return () => ro.disconnect();
-  }, []);
+  }, [measure]);
+
+  const setZoomMode = (z: boolean) => {
+    setZoom(z);
+    scroller.current?.scrollTo({ left: 0 });
+  };
 
   // Page commands: switch screen, bring the demo into view and pan to the relevant area.
   useEffect(() => {
@@ -78,7 +97,12 @@ export function StitchDemo() {
       if (c.screen) setScreen(c.screen);
       rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       const el = scroller.current;
-      if (el && c.pan !== undefined) el.scrollTo({ left: c.pan * (el.scrollWidth - el.clientWidth), behavior: "smooth" });
+      if (!el || c.pan === undefined) return;
+      // On phones, zoom in so the highlighted panel is readable, then pan to it once resized.
+      if (window.matchMedia("(max-width: 767px)").matches && el.scrollWidth <= el.clientWidth + 2) {
+        pendingPan.current = c.pan;
+        setZoom(true);
+      } else el.scrollTo({ left: c.pan * (el.scrollWidth - el.clientWidth), behavior: "smooth" });
     };
     window.addEventListener(DEMO_EVENT, onCmd);
     return () => window.removeEventListener(DEMO_EVENT, onCmd);
@@ -87,7 +111,7 @@ export function StitchDemo() {
   const pannable = pan.thumb < 0.99;
 
   return (
-    <div ref={rootRef} className={`sd ${figtree.variable} ${newsreader.variable} ${geistMono.variable}`} id="demo">
+    <div ref={rootRef} className={`sd${zoom ? " sd-zoom" : ""} ${figtree.variable} ${newsreader.variable} ${geistMono.variable}`} id="demo">
       {/* Control bar: SCREEN · THEME · hint (as in the reference) */}
       <div className="sd-ctrls">
         <div className="sd-ctrl">
@@ -97,7 +121,7 @@ export function StitchDemo() {
           <div className="sd-seg" role="group" aria-labelledby="sd-screen-lbl">
             {SCREENS.map(([v, label]) => (
               <button type="button" key={v} className={screen === v ? "on" : ""} aria-pressed={screen === v} onClick={() => setScreen(v)}>
-                {label}
+                <span>{label}</span>
               </button>
             ))}
           </div>
@@ -109,22 +133,36 @@ export function StitchDemo() {
           <div className="sd-seg" role="group" aria-labelledby="sd-theme-lbl">
             {THEMES.map(([v, label]) => (
               <button type="button" key={v} className={theme === v ? "on" : ""} aria-pressed={theme === v} onClick={() => setTheme(v)}>
-                {label}
+                <span>{label}</span>
               </button>
             ))}
           </div>
         </div>
-        <p className="sd-hint">try: click a clip, right-click the timeline →</p>
+        <p className="sd-hint">
+          <span className="sd-hint-k">Explore the editor:</span> select a clip or right-click the timeline below.
+        </p>
       </div>
 
-      {/* Small screens: how to explore + where you are */}
-      <div aria-hidden="true" className={`sd-panhint${pannable ? "" : " sd-invisible"}`}>
-        <p>
-          swipe to explore · tap a clip · long-press the timeline <span className={pan.touched ? "" : "nudge"}>→</span>
+      {/* Phones: Fit shows the whole live window; Zoom gives a larger view to swipe through. */}
+      <div className="sd-panhint">
+        <p aria-hidden="true">
+          {zoom ? (
+            <>
+              swipe to explore · long-press the timeline <span className={pan.touched ? "" : "nudge"}>→</span>
+            </>
+          ) : (
+            <>it&apos;s live: tap around, or zoom in</>
+          )}
         </p>
-        <div className="sd-scrub">
-          <span style={{ width: `${pan.thumb * 100}%`, left: `${pan.pos * (1 - pan.thumb) * 100}%` }} />
-        </div>
+        {zoom && pannable && (
+          <div className="sd-scrub" aria-hidden="true">
+            <span style={{ width: `${pan.thumb * 100}%`, left: `${pan.pos * (1 - pan.thumb) * 100}%` }} />
+          </div>
+        )}
+        <button type="button" className="sd-zoombtn" aria-pressed={zoom} onClick={() => setZoomMode(!zoom)}>
+          {zoom ? <Minimize2 aria-hidden="true" size={14} strokeWidth={2.4} /> : <Maximize2 aria-hidden="true" size={14} strokeWidth={2.4} />}
+          {zoom ? "Fit" : "Zoom"}
+        </button>
       </div>
 
       <div className="sd-panwrap">

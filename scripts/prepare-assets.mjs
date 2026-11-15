@@ -16,7 +16,9 @@
  *     exists in both themes. No pixels of the application UI are altered.
  *  3. Copies brand assets (mascot, favicons) and derives an apple-touch icon.
  *  4. Renders the decorative 1-bit dithered illustrations (film reel, clapperboard,
- *     lens, film strip) used around the page.
+ *     film strip) and the hero's halftone camera used around the page.
+ *
+ *   node scripts/prepare-assets.mjs --decor-only   re-renders just the illustrations.
  */
 import sharp from "sharp";
 import { mkdir, copyFile } from "node:fs/promises";
@@ -77,7 +79,20 @@ function locate(N, H) {
   return best;
 }
 
+async function renderDecor() {
+  await mkdir(out("decor"), { recursive: true });
+  for (const [name, art] of Object.entries(DECOR)) {
+    const file = out("decor", `${name}.png`);
+    await (art.halftone ? halftone(art, file) : dither(art, file));
+  }
+}
+
 async function main() {
+  if (process.argv.includes("--decor-only")) {
+    await renderDecor();
+    console.log("done (decor only)");
+    return;
+  }
   for (const d of ["product", "branding", "decor"]) await mkdir(out(d), { recursive: true });
   await mkdir(path.join(ROOT, "src", "assets", "og"), { recursive: true });
 
@@ -157,14 +172,16 @@ async function main() {
     .toFile(path.join(ROOT, "src", "app", "apple-icon.png"));
 
   // ---------------------------------------------------------------- 4. decor
-  for (const [name, art] of Object.entries(DECOR)) {
-    await dither(art.svg, art.w, art.h, out("decor", `${name}.png`));
-  }
+  await renderDecor();
   console.log("done");
 }
 
-/** Floyd–Steinberg 1-bit dither: ink pixels opaque Deep Ink, the rest transparent. */
-async function dither(svg, w, h, file) {
+/**
+ * Floyd–Steinberg 1-bit dither of a greyscale render: 1 = ink, 2 = covered but light, 0 = empty.
+ * `grain` > 1 dithers the mid-tones on a coarser grid (pure blacks and whites stay pixel-exact),
+ * so the shading stays clean, without moiré, when the image is shown at around half size.
+ */
+async function ditherMask(svg, w, h, grain = 1) {
   const { data } = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const lum = new Float32Array(w * h);
   const alpha = new Uint8Array(w * h);
@@ -173,24 +190,68 @@ async function dither(svg, w, h, file) {
     alpha[i] = data[i * 4 + 3];
     lum[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   }
-  const outBuf = Buffer.alloc(w * h * 4);
+  const on = new Uint8Array(w * h);
+  // Error diffusion over a grid of (gw × gh) cells with the given starting luminance.
+  const diffuse = (L, gw, gh, has, setCell) => {
+    for (let y = 0; y < gh; y++)
+      for (let x = 0; x < gw; x++) {
+        const k = y * gw + x;
+        if (!has(k)) continue;
+        const old = L[k];
+        const ink = old < 128;
+        const err = old - (ink ? 0 : 255);
+        if (x + 1 < gw) L[k + 1] += (err * 7) / 16;
+        if (y + 1 < gh) {
+          if (x > 0) L[k + gw - 1] += (err * 3) / 16;
+          L[k + gw] += (err * 5) / 16;
+          if (x + 1 < gw) L[k + gw + 1] += err / 16;
+        }
+        setCell(k, ink ? 1 : 2);
+      }
+  };
+  if (grain <= 1) {
+    diffuse(lum, w, h, (k) => alpha[k] >= 128, (k, v) => (on[k] = v));
+    return on;
+  }
+  // Solid tones stay pixel-exact (outlines, text); mid-tones are dithered block by block.
+  const bw = Math.ceil(w / grain), bh = Math.ceil(h / grain);
+  const cell = (x, y) => ((y / grain) | 0) * bw + ((x / grain) | 0);
+  const bl = new Float32Array(bw * bh), bn = new Uint16Array(bw * bh), res = new Uint8Array(bw * bh);
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
       if (alpha[i] < 128) continue;
-      const old = lum[i];
-      const ink = old < 128;
-      const err = old - (ink ? 0 : 255);
-      if (x + 1 < w) lum[i + 1] += (err * 7) / 16;
-      if (y + 1 < h) {
-        if (x > 0) lum[i + w - 1] += (err * 3) / 16;
-        lum[i + w] += (err * 5) / 16;
-        if (x + 1 < w) lum[i + w + 1] += err / 16;
-      }
-      if (ink) {
-        outBuf[i * 4] = 0x15; outBuf[i * 4 + 1] = 0x13; outBuf[i * 4 + 2] = 0x1f; outBuf[i * 4 + 3] = 255;
-      }
+      if (lum[i] < 48) on[i] = 1;
+      else if (lum[i] > 232) on[i] = 2;
+      else { const k = cell(x, y); bl[k] += lum[i]; bn[k]++; }
     }
+  for (let k = 0; k < bw * bh; k++) if (bn[k]) bl[k] /= bn[k];
+  diffuse(bl, bw, bh, (k) => bn[k] > 0, (k, v) => (res[k] = v));
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (alpha[i] >= 128 && !on[i]) on[i] = res[cell(x, y)];
+    }
+  return on;
+}
+
+/**
+ * 1-bit illustration: ink pixels opaque Deep Ink, the rest transparent.
+ * An optional `accent` layer (same canvas) is dithered on top in Stitch Orange, and `paper`
+ * fills the light areas inside shapes with white so overlapping cards read as paper cut-outs.
+ */
+async function dither({ svg, w, h, accent, paper = false, grain = 1 }, file) {
+  const ink = await ditherMask(svg, w, h, grain);
+  const acc = accent ? await ditherMask(accent, w, h, grain) : null;
+  const outBuf = Buffer.alloc(w * h * 4);
+  const put = (i, r, g, b) => {
+    outBuf[i * 4] = r; outBuf[i * 4 + 1] = g; outBuf[i * 4 + 2] = b; outBuf[i * 4 + 3] = 255;
+  };
+  for (let i = 0; i < w * h; i++) {
+    if (acc && acc[i] === 1) put(i, 0xf4, 0x5f, 0x3f);
+    else if (ink[i] === 1) put(i, 0x15, 0x13, 0x1f);
+    else if (paper && (ink[i] === 2 || (acc && acc[i] === 2))) put(i, 0xff, 0xff, 0xff);
+  }
   await sharp(outBuf, { raw: { width: w, height: h, channels: 4 } }).png({ palette: true }).toFile(file);
 }
 
@@ -242,27 +303,6 @@ const DECOR = {
       </g>
     </svg>`,
   },
-  // A camera lens seen at an angle, with focus ring knurling.
-  lens: {
-    w: 380, h: 380,
-    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="380" height="380" viewBox="0 0 380 380">
-      <defs>
-        <radialGradient id="glass" cx=".34" cy=".3" r=".85"><stop offset="0" stop-color="#ffffff"/><stop offset=".35" stop-color="#9c9c9c"/><stop offset=".8" stop-color="#202020"/><stop offset="1" stop-color="#000"/></radialGradient>
-        <linearGradient id="barrel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d8d8d8"/><stop offset="1" stop-color="#2a2a2a"/></linearGradient>
-      </defs>
-      <g transform="translate(190 190) rotate(-18) scale(1 .9)">
-        <circle r="172" fill="#000"/>
-        <circle r="166" fill="url(#barrel)"/>
-        <circle r="152" fill="none" stroke="#fff" stroke-width="14" stroke-dasharray="3 7"/>
-        <circle r="138" fill="#000"/>
-        <circle r="132" fill="#7a7a7a"/>
-        <circle r="112" fill="#000"/>
-        <circle r="106" fill="url(#glass)"/>
-        <circle r="72" fill="none" stroke="#bdbdbd" stroke-width="2"/>
-        <ellipse cx="-40" cy="-46" rx="26" ry="14" transform="rotate(-35 -40 -46)" fill="#fff"/>
-      </g>
-    </svg>`,
-  },
   // A gently curving film strip.
   "film-strip": {
     w: 620, h: 200,
@@ -272,6 +312,89 @@ const DECOR = {
     </svg>`,
   },
 };
+
+/**
+ * Halftone print: the greyscale render is sampled on a square grid and each cell becomes one Deep
+ * Ink dot whose area follows the tone, like a newspaper photo. `accent` is an SVG drawn on top
+ * as-is (flat Stitch Orange marks). Everything outside the art stays transparent.
+ */
+async function halftone({ svg, w, h, cell = 8, accent = "" }, file) {
+  const { data } = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const dots = [];
+  for (let cy = 0; cy < h; cy += cell)
+    for (let cx = 0; cx < w; cx += cell) {
+      let lum = 0, cover = 0, n = 0;
+      for (let y = cy; y < Math.min(cy + cell, h); y++)
+        for (let x = cx; x < Math.min(cx + cell, w); x++) {
+          const i = (y * w + x) * 4, a = data[i + 3] / 255;
+          lum += a * (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]);
+          cover += a;
+          n++;
+        }
+      if (cover / n < 0.35) continue;
+      const dark = Math.min(1, Math.max(0.05, 1 - lum / cover / 255)) * Math.min(1, cover / n / 0.8);
+      const r = (cell / 2) * 1.32 * Math.sqrt(dark);
+      if (r >= 0.55) dots.push(`<circle cx="${cx + cell / 2}" cy="${cy + cell / 2}" r="${r.toFixed(2)}"/>`);
+    }
+  const page = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    <g fill="#15131f">${dots.join("")}</g>${accent}</svg>`;
+  await sharp(Buffer.from(page)).png({ palette: true }).toFile(file);
+}
+
+const svgOpen = (w, h) => `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`;
+
+DECOR.camera = (() => {
+  // Hero, beside the headline: a tilted rangefinder camera printed in halftone, with two little
+  // orange "pop" bursts by the lens (after the supplied reference, recoloured to the palette).
+  const w = 460, h = 380;
+  const cx = 230, cy = 196, tilt = -14;
+  const rad = (d) => (d * Math.PI) / 180;
+  // Lens centre in canvas space (it sits at (12, 34) inside the rotated body).
+  const lx = cx + 12 * Math.cos(rad(tilt)) - 34 * Math.sin(rad(tilt));
+  const ly = cy + 12 * Math.sin(rad(tilt)) + 34 * Math.cos(rad(tilt));
+  const burst = (angles, r1, r2) =>
+    angles
+      .map((a) => {
+        const c = Math.cos(rad(a)), sn = Math.sin(rad(a));
+        return `<path d="M${(lx + c * r1).toFixed(1)} ${(ly + sn * r1).toFixed(1)} L${(lx + c * r2).toFixed(1)} ${(ly + sn * r2).toFixed(1)}"/>`;
+      })
+      .join("");
+  return {
+    w, h, halftone: true, cell: 7,
+    svg: `${svgOpen(w, h)}<defs>
+        <linearGradient id="hide" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9a9a9a"/><stop offset=".55" stop-color="#b8b8b8"/><stop offset="1" stop-color="#7a7a7a"/></linearGradient>
+        <linearGradient id="plate" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#bdbdbd"/><stop offset=".5" stop-color="#ececec"/><stop offset="1" stop-color="#c4c4c4"/></linearGradient>
+        <radialGradient id="glass" cx=".38" cy=".34" r=".8"><stop offset="0" stop-color="#9a9a9a"/><stop offset=".45" stop-color="#2a2a2a"/><stop offset="1" stop-color="#050505"/></radialGradient>
+        <radialGradient id="barrel" cx=".4" cy=".35" r=".75"><stop offset="0" stop-color="#e2e2e2"/><stop offset="1" stop-color="#8a8a8a"/></radialGradient>
+      </defs>
+      <g transform="translate(${cx} ${cy}) rotate(${tilt})">
+        <rect x="-184" y="-46" width="16" height="34" rx="5" fill="#8a8a8a"/>
+        <rect x="168" y="-46" width="16" height="34" rx="5" fill="#8a8a8a"/>
+        <rect x="-36" y="-124" width="118" height="62" rx="12" fill="url(#plate)"/>
+        <rect x="-4" y="-112" width="50" height="32" rx="4" fill="#0e0e0e"/>
+        <rect x="4" y="-106" width="16" height="10" rx="2" fill="#5a5a5a"/>
+        <rect x="-138" y="-98" width="46" height="26" rx="5" fill="#8c8c8c"/>
+        <rect x="104" y="-92" width="34" height="20" rx="5" fill="#a8a8a8"/>
+        <rect x="-172" y="-74" width="344" height="190" rx="18" fill="url(#hide)"/>
+        <rect x="-172" y="-74" width="344" height="46" rx="18" fill="url(#plate)"/>
+        <rect x="-172" y="-40" width="344" height="12" fill="url(#plate)"/>
+        <rect x="-152" y="-64" width="40" height="28" rx="4" fill="#f4f4f4"/>
+        <rect x="-148" y="-60" width="32" height="20" rx="3" fill="#cfcfcf"/>
+        <rect x="132" y="-16" width="30" height="104" rx="12" fill="#5e5e5e"/>
+        <path d="M-172 70 H172 V98 a18 18 0 0 1 -18 18 H-154 a18 18 0 0 1 -18 -18 Z" fill="#666666"/>
+        <circle cx="12" cy="34" r="84" fill="#1c1c1c"/>
+        <circle cx="12" cy="34" r="76" fill="url(#barrel)"/>
+        <circle cx="12" cy="34" r="58" fill="#161616"/>
+        <circle cx="12" cy="34" r="50" fill="url(#glass)"/>
+        <circle cx="12" cy="34" r="22" fill="#0a0a0a"/>
+        <circle cx="-6" cy="16" r="9" fill="#f2f2f2"/>
+        <rect x="110" y="20" width="22" height="36" rx="6" fill="#d6d6d6"/>
+        <rect x="116" y="28" width="10" height="20" rx="3" fill="#6a6a6a"/>
+      </g></svg>`,
+    accent: `<g fill="none" stroke="#f45f3f" stroke-width="10" stroke-linecap="round">
+        ${burst([168, 200, 232], 104, 128)}${burst([-74, -42, -10], 104, 128)}</g>`,
+  };
+})();
 
 main().catch((e) => {
   console.error(e);

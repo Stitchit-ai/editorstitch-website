@@ -94,16 +94,46 @@
   white-space: nowrap;
   transition: background-color 0.25s, color 0.25s, transform 0.2s var(--sd-snap);
 }
-.sd-seg button:hover { color: var(--color-ink); }
+/* Options feel pressable: on hover (real pointers only) or keyboard focus the label lifts a couple
+   of pixels and the pill picks up a faint wash; a tap gives the same wash plus the press-in scale.
+   The selected pill keeps its dark fill; its label lifts too, but never changes colour. */
+.sd-seg button > span {
+  display: inline-block;
+  transition: translate 0.28s var(--sd-snap);
+}
+@media (hover: hover) {
+  .sd-seg button:hover > span { translate: 0 -2.5px; }
+  .sd-seg button:not(.on):hover { color: var(--color-ink); background: rgb(21 19 31 / 0.06); }
+}
+.sd-seg button:focus-visible {
+  outline: 2px solid var(--color-orange-ink);
+  outline-offset: 2px;
+}
+.sd-seg button:focus-visible > span { translate: 0 -2.5px; }
+.sd-seg button:not(.on):focus-visible { color: var(--color-ink); background: rgb(21 19 31 / 0.06); }
+.sd-seg button:not(.on):active { background: rgb(21 19 31 / 0.1); }
 .sd-seg button:active { transform: scale(0.96); }
 .sd-seg button.on { background: var(--color-ink); color: #fff; }
+/* Interaction hint: a short lead in ink with a soft peach highlighter swipe, then the instruction,
+   set in the controls' own face and size so the row reads as one. The control bar is exactly as
+   wide as the showcase window, so margin-left: auto pins the hint's right edge to the window's
+   right edge; when it no longer fits beside SCREEN and THEME it wraps onto its own row, still flush
+   right, and any extra lines wrap leftwards. */
 .sd-hint {
   margin-left: auto;
-  font-family: var(--font-hand);
-  font-size: 23px;
+  font-family: var(--font-display);
+  font-size: 14px;
   font-weight: 500;
-  line-height: 1;
+  line-height: 1.45;
   color: var(--color-ink-2);
+  text-align: right;
+  text-wrap: balance;
+}
+.sd-hint-k {
+  font-weight: 600;
+  color: var(--color-ink);
+  background: linear-gradient(transparent 58%, rgb(255 154 130 / 0.45) 58%, rgb(255 154 130 / 0.45) 92%, transparent 92%);
+  padding: 0 2px;
 }
 
 /* ---------- stage: fixed 1440×900 design scaled to the available width ----------
@@ -130,7 +160,9 @@
   width: 1440px;
   height: 900px;
   transform-origin: 0 0;
-  transform: scale(tan(atan2(100cqw, 1440px)));
+  /* --sd-scale is measured from the window's width in StitchDemo (authoritative in every
+     browser); the container-unit formula only covers the first paint before that runs. */
+  transform: scale(var(--sd-scale, tan(atan2(100cqw, 1440px))));
 }
 
 /* ---------- motion ---------- */
@@ -161,10 +193,9 @@
 
 /* ---------- small screens: keep the window readable and pan sideways ---------- */
 .sd-panhint { display: none; }
-.sd-invisible { visibility: hidden; }
 .sd-fade { display: none; }
 
-@media (max-width: 1023px) {
+@media (max-width: 767px) {
   .sd-hint { display: none; }
 }
 @media (max-width: 767px) {
@@ -176,13 +207,14 @@
   .sd-panhint {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
     margin-bottom: 10px;
   }
   .sd-panhint p {
+    flex: 1;
+    min-width: 0;
     font-family: var(--font-hand);
-    font-size: 20px;
+    font-size: 19px;
     font-weight: 500;
     line-height: 1.15;
     color: var(--color-ink-2);
@@ -191,15 +223,36 @@
   .sd-scrub {
     position: relative;
     flex: none;
-    width: 72px;
+    width: 56px;
     height: 6px;
     overflow: hidden;
     border-radius: 99px;
     background: rgb(21 19 31 / 0.1);
   }
   .sd-scrub span { position: absolute; top: 0; bottom: 0; border-radius: 99px; background: var(--color-orange); }
+  .sd-zoombtn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0 13px;
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    background: var(--color-card);
+    box-shadow: 0 1px 2px rgb(32 28 20 / 0.05);
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .sd-zoombtn:active { transform: scale(0.96); }
 
-  .sd-scroller {
+  /* Fit (default): the whole live window at the screen's width, height from its 16:10 ratio. */
+  .sd-stage-wrap { border-radius: 10px; }
+
+  /* Zoom: a larger window (~0.7 scale) to swipe through. */
+  .sd-zoom .sd-scroller {
     margin-inline: -16px;
     padding: 0 16px 24px;
     overflow-x: auto;
@@ -207,11 +260,10 @@
     scroll-padding-inline: 16px;
     scrollbar-width: none;
   }
-  .sd-scroller::-webkit-scrollbar { display: none; }
-  /* ~0.7 scale: the interface stays legible; swipe to see all of it. */
-  .sd-stage-wrap { width: 1000px; }
+  .sd-zoom .sd-scroller::-webkit-scrollbar { display: none; }
+  .sd-zoom .sd-stage-wrap { width: 1000px; border-radius: 16px; }
 
-  .sd-fade {
+  .sd-zoom .sd-fade {
     display: block;
     position: absolute;
     top: 0;
@@ -221,7 +273,7 @@
     opacity: 0;
     transition: opacity 0.3s;
   }
-  .sd-fade.on { opacity: 1; }
+  .sd-zoom .sd-fade.on { opacity: 1; }
   .sd-fade-l { left: -16px; background: linear-gradient(to right, var(--color-cream), transparent); }
   .sd-fade-r { right: -16px; background: linear-gradient(to left, var(--color-cream), transparent); }
 }

@@ -57,7 +57,7 @@ export default async function Image() {
             color: "#4A4654",
           }}
         >
-          <span>AI-assisted video editing for {siteConfig.release.platform}</span>
+          <span>AI-assisted video editing for {siteConfig.downloads.windows.label}</span>
           <span style={{ color: "#15131F" }}>{siteConfig.domain}</span>
         </div>
       </div>
