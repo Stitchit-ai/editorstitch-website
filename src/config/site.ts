@@ -37,13 +37,13 @@ export const siteConfig = {
       label: "Windows",
       description: "Windows installer",
       version,
-      url: `https://github.com/Shireenaliza/stitch-downloads/releases/latest/download/Stitch-Setup-${version}.exe`,
+      url: `https://github.com/Stitchit-ai/stitch-downloads/releases/latest/download/Stitch-Setup-${version}.exe`,
     },
     macos: {
       label: "macOS",
       description: "Apple Silicon (M1 and later)",
       version,
-      url: `https://github.com/Shireenaliza/stitch-downloads/releases/latest/download/stitch_${version}_macos_arm64.dmg`,
+      url: `https://github.com/Stitchit-ai/stitch-downloads/releases/latest/download/stitch_${version}_macos_arm64.dmg`,
     },
   } satisfies Record<string, Installer>,
 
